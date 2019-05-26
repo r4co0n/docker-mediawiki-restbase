@@ -1,11 +1,11 @@
-FROM node:latest
+FROM node:8
 
 MAINTAINER pastakhov@yandex.ru
 
 ENV RB_HOME=/var/lib/restbase \
     RB_DATA=/data \
     RB_USER=restbase \
-    RB_BRANCH=v0.16.9
+    RB_BRANCH=v0.19.3
 
 # restbase setup
 RUN set -x; \

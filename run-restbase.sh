@@ -22,8 +22,15 @@ default_project: &default_project
   x-modules:
     - path: projects/docker.yaml
       options: &default_options
-        # 10 days Varnish caching, one day client-side
-        purged_cache_control: ${RB_CONF_PURGED_CACHE_CONTROL:-s-maxage=864000, max-age=86400}
+        table:
+          backend: sqlite
+          dbname: /data/restbase.sqlite3
+          pool_idle_timeout: 20000
+          retry_delay: 250
+          retry_limit: 10
+          show_sql: false
+        # 14 days Varnish caching, no client-side caching
+        purged_cache_control: ${RB_CONF_PURGED_CACHE_CONTROL:-s-maxage=864000, max-age=0, must-revalidate}
         # Cache control for purged endpoints allowing short-term client caching
         purged_cache_control_client_cache: ${RB_CONF_PURGED_CACHE_CONTROL_CLIENT_CACHE:-s-maxage=1209600, max-age=300}
         related:
@@ -32,19 +39,14 @@ default_project: &default_project
           apiUriTemplate: "{{'${RB_CONF_API_URI_TEMPLATE:-'http://{domain}/w/api.php'}'}}"
           baseUriTemplate: "{{'${RB_CONF_BASE_URI_TEMPLATE:-'http://{domain}/api/rest_v1'}'}}"
         skip_updates: ${RB_CONF_SKIP_UPDATES:-false}
-        table:
-          backend: sqlite
-          dbname: /data/restbase.sqlite3
-          pool_idle_timeout: 20000
-          retry_delay: 250
-          retry_limit: 10
-          show_sql: false
 EOT
 
 if [ -n "$RB_CONF_PARSOID_HOST" ]; then
     cat <<EOT >> config.yaml
         parsoid:
           host: $RB_CONF_PARSOID_HOST
+          grace_ttl: 1000000
+          stash_ratelimit: 5
 EOT
 fi
 
@@ -59,6 +61,7 @@ if [ -n "$RB_CONF_MATHOID_HOST" ]; then
     cat <<EOT >> config.yaml
         mathoid:
           host: $RB_CONF_MATHOID_HOST
+          # 10 days Varnish caching, one day client-side
           cache-control: ${RB_CONF_MATHOID_CACHE_CONTROL:-s-maxage=864000, max-age=86400}
 EOT
 fi
@@ -67,6 +70,16 @@ if [ -n "$RB_CONF_MOBILEAPPS_HOST" ]; then
     cat <<EOT >> config.yaml
         mobileapps:
           host: $RB_CONF_MOBILEAPPS_HOST
+EOT
+fi
+
+if [ -n "$RB_CONF_SUMMARY_HOST" ]; then
+    cat <<EOT >> config.yaml
+        summary:
+          protocol: http
+          implementation: mcs
+          host: $RB_CONF_SUMMARY_HOST
+
 EOT
 fi
 
@@ -87,9 +100,11 @@ fi
 if [ -n "$RB_CONF_PDF_URI" ]; then
     cat <<EOT >> config.yaml
         pdf:
-          uri: $RB_CONF_PDF_URI
+          # Cache PDF for 5 minutes since it's not purged
           cache_control: ${RB_CONF_PDF_CACHE_CONTROL:-s-maxage=600, max-age=600}
+          uri: $RB_CONF_PDF_URI
           secret: ${RB_CONF_PDF_SECRET:-secret}
+          scheme: http
 EOT
 fi
 
@@ -109,6 +124,7 @@ spec_root: &spec_root
   title: "The RESTBase root"
   x-request-filters:
     - path: lib/security_response_header_filter.js
+    - path: lib/normalize_headers_filter.js
   x-sub-request-filters:
     - type: default
       name: http
@@ -160,8 +176,7 @@ done
 # see https://phabricator.wikimedia.org/diffusion/GRES/browse/master/config.example.yaml
 # see https://phabricator.wikimedia.org/diffusion/GRES/browse/master/config.example.wikimedia.yaml
 cat <<EOT >> config.yaml
-#
-#
+
 # Finally, a standard service-runner config.
 info:
   name: restbase
@@ -172,7 +187,7 @@ services:
     conf:
       port: 7231
       spec: *spec_root
-      salt: secret
+      salt: '${RB_CONF_SALT:-secret}'
       default_page_size: 125
       user_agent: '${RB_CONF_USER_AGENT:-RESTBase}'
       ui_name: '${RB_CONF_UI_NAME:-RESTBase}'
@@ -182,6 +197,8 @@ services:
 logging:
   name: restbase
   level: ${RB_CONF_LOGGING_LEVEL:-info}
+  streams:
+    - type: stdout
 
 # Number of worker processes to spawn.
 # Set to 0 to run everything in a single process without clustering.
